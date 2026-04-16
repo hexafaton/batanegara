@@ -3,17 +3,20 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:webview_flutter/webview_flutter.dart';
-import 'package:webview_flutter_android/webview_flutter_android.dart';
+import 'package:webview_flutter_android/webview_flutter_android.dart'
+    show
+        AndroidWebViewController,
+        AndroidWebViewPlatform,
+        GeolocationPermissionsResponse;
 import 'package:path_provider/path_provider.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:url_launcher/url_launcher_string.dart';
 import 'package:open_filex/open_filex.dart';
 import 'package:permission_handler/permission_handler.dart';
-import 'package:image_picker/image_picker.dart';
-import 'package:geolocator/geolocator.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  
+
   if (Platform.isAndroid) {
     WebViewPlatform.instance = AndroidWebViewPlatform();
   }
@@ -39,7 +42,8 @@ class WebViewPage extends StatefulWidget {
   State<WebViewPage> createState() => _WebViewPageState();
 }
 
-class _WebViewPageState extends State<WebViewPage> with SingleTickerProviderStateMixin {
+class _WebViewPageState extends State<WebViewPage>
+    with SingleTickerProviderStateMixin {
   late final WebViewController controller;
   DateTime? lastBackPressed;
   bool _isSaving = false;
@@ -48,8 +52,7 @@ class _WebViewPageState extends State<WebViewPage> with SingleTickerProviderStat
   late final AnimationController _successAnimationController;
   late final Animation<double> _successScaleAnimation;
 
-  final String baseUrl =
-      'https://barata-berita-acara-pertanahan.netlify.app/';
+  final String baseUrl = 'https://barata-berita-acara-pertanahan.netlify.app/';
 
   static const String _interceptBlobJs = """
     (function() {
@@ -122,153 +125,6 @@ class _WebViewPageState extends State<WebViewPage> with SingleTickerProviderStat
     })();
   """;
 
-  // JavaScript untuk meng-override getUserMedia dan Geolocation
-  String get _overrideWebApisJs => """
-    (function() {
-      console.log('Overriding Web APIs for Flutter integration');
-      
-      // ========== OVERRIDE CAMERA API ==========
-      // Hancurkan getUserMedia untuk mencegah web mengakses kamera langsung
-      if (navigator.mediaDevices) {
-        navigator.mediaDevices.getUserMedia = function(constraints) {
-          console.log('getUserMedia called - redirecting to Flutter camera');
-          
-          // Kembalikan promise yang akan di-resolve oleh Flutter
-          return new Promise((resolve, reject) => {
-            window._pendingCameraResolve = resolve;
-            window._pendingCameraReject = reject;
-            
-            // Panggil Flutter untuk membuka kamera
-            if (window.FlutterCameraChannel) {
-              window.FlutterCameraChannel.postMessage('open_camera');
-            } else {
-              reject(new Error('Flutter camera channel not available'));
-            }
-            
-            // Timeout 30 detik
-            setTimeout(() => {
-              if (window._pendingCameraResolve) {
-                reject(new Error('Camera timeout'));
-                window._pendingCameraResolve = null;
-                window._pendingCameraReject = null;
-              }
-            }, 30000);
-          });
-        };
-      }
-      
-      // ========== OVERRIDE LOCATION API ==========
-      if (navigator.geolocation) {
-        navigator.geolocation.getCurrentPosition = function(success, error, options) {
-          console.log('getCurrentPosition called - redirecting to Flutter location');
-          
-          if (window.FlutterLocationChannel) {
-            window.FlutterLocationChannel.postMessage('get_location');
-            
-            // Simpan callback
-            window._pendingLocationSuccess = success;
-            window._pendingLocationError = error;
-            
-            // Timeout 30 detik
-            setTimeout(() => {
-              if (window._pendingLocationSuccess) {
-                if (window._pendingLocationError) {
-                  window._pendingLocationError(new Error('Location timeout'));
-                }
-                window._pendingLocationSuccess = null;
-                window._pendingLocationError = null;
-              }
-            }, 30000);
-          } else if (error) {
-            error(new Error('Flutter location channel not available'));
-          }
-        };
-        
-        navigator.geolocation.watchPosition = function(success, error, options) {
-          console.log('watchPosition called - using getCurrentPosition instead');
-          navigator.geolocation.getCurrentPosition(success, error, options);
-          return 0;
-        };
-      }
-      
-      // ========== RECEIVE DATA FROM FLUTTER ==========
-      // Menerima foto dari Flutter
-      window.receiveImageFromFlutter = function(base64Image, filename) {
-        console.log('Image received from Flutter, length:', base64Image.length);
-        
-        // Buat MediaStream dummy untuk memenuhi promise getUserMedia
-        // Ini diperlukan agar web tidak error
-        if (window._pendingCameraResolve) {
-          // Buat video element dummy
-          const videoElement = document.createElement('video');
-          const stream = new MediaStream();
-          videoElement.srcObject = stream;
-          window._pendingCameraResolve(stream);
-          window._pendingCameraResolve = null;
-          window._pendingCameraReject = null;
-        }
-        
-        // Kirim event ke web
-        var event = new CustomEvent('flutterImage', {
-          detail: { imageData: base64Image, filename: filename }
-        });
-        window.dispatchEvent(event);
-      };
-      
-      // Menerima lokasi dari Flutter
-      window.receiveLocationFromFlutter = function(latitude, longitude, accuracy) {
-        console.log('Location received:', latitude, longitude);
-        
-        // Format seperti Position object Geolocation API
-        var position = {
-          coords: {
-            latitude: latitude,
-            longitude: longitude,
-            accuracy: accuracy || 10,
-            altitude: null,
-            altitudeAccuracy: null,
-            heading: null,
-            speed: null
-          },
-          timestamp: Date.now()
-        };
-        
-        // Resolve pending getCurrentPosition
-        if (window._pendingLocationSuccess) {
-          window._pendingLocationSuccess(position);
-          window._pendingLocationSuccess = null;
-          window._pendingLocationError = null;
-        }
-        
-        // Dispatch event untuk web
-        var event = new CustomEvent('flutterLocation', {
-          detail: { latitude: latitude, longitude: longitude, accuracy: accuracy }
-        });
-        window.dispatchEvent(event);
-        
-        // Update form fields
-        var latField = document.querySelector('input[name="latitude"], input[name="lat"]');
-        var lngField = document.querySelector('input[name="longitude"], input[name="lng"]');
-        var coordField = document.querySelector('input[name="coordinates"], textarea[name="coordinates"]');
-        
-        if (latField) latField.value = latitude;
-        if (lngField) lngField.value = longitude;
-        if (coordField) coordField.value = latitude + ', ' + longitude;
-      };
-      
-      // Menerima status izin
-      window.receivePermissionStatus = function(permissionType, isGranted) {
-        console.log('Permission status:', permissionType, isGranted);
-        var event = new CustomEvent('flutterPermissionStatus', {
-          detail: { type: permissionType, granted: isGranted }
-        });
-        window.dispatchEvent(event);
-      };
-      
-      console.log('Web APIs override complete');
-    })();
-  """;
-
   @override
   void initState() {
     super.initState();
@@ -282,7 +138,10 @@ class _WebViewPageState extends State<WebViewPage> with SingleTickerProviderStat
     );
     _requestPermissions();
     _initWebView();
-    SystemChrome.setEnabledSystemUIMode(SystemUiMode.manual, overlays: [SystemUiOverlay.top, SystemUiOverlay.bottom]);
+    SystemChrome.setEnabledSystemUIMode(
+      SystemUiMode.manual,
+      overlays: [SystemUiOverlay.top, SystemUiOverlay.bottom],
+    );
   }
 
   @override
@@ -293,23 +152,19 @@ class _WebViewPageState extends State<WebViewPage> with SingleTickerProviderStat
 
   Future<void> _requestPermissions() async {
     if (!Platform.isAndroid) return;
-    
-    // Request camera permission
+
+    // Request camera permission - agar web bisa akses kamera
     final cameraStatus = await Permission.camera.request();
     debugPrint('Camera permission: ${cameraStatus.isGranted}');
-    
-    // Request location permission  
+
+    // Request location permission - agar web bisa akses GPS
     final locationStatus = await Permission.location.request();
     debugPrint('Location permission: ${locationStatus.isGranted}');
-    
-    // Request storage permissions
+
+    // Request storage permissions untuk download PDF
     final sdkVersion = _parseAndroidSdk();
     if (sdkVersion >= 33) {
-      await [
-        Permission.photos,
-        Permission.videos,
-        Permission.audio,
-      ].request();
+      await [Permission.photos, Permission.videos, Permission.audio].request();
     } else {
       await Permission.storage.request();
     }
@@ -324,228 +179,49 @@ class _WebViewPageState extends State<WebViewPage> with SingleTickerProviderStat
     return 30;
   }
 
-  // ========== CAMERA FUNCTION ==========
-  Future<void> _openCamera() async {
-    try {
-      // Check permission
-      PermissionStatus cameraStatus = await Permission.camera.status;
-      
-      if (cameraStatus.isDenied) {
-        cameraStatus = await Permission.camera.request();
-      } else if (cameraStatus.isPermanentlyDenied) {
-        _showErrorSnackbar('Izin kamera ditolak permanen. Buka Pengaturan untuk mengubahnya.');
-        await openAppSettings();
-        return;
-      }
-
-      if (!cameraStatus.isGranted) {
-        _showErrorSnackbar('Izin kamera ditolak');
-        // Kirim error ke web
-        await controller.runJavaScript("""
-          if (window._pendingCameraReject) {
-            window._pendingCameraReject(new Error('Camera permission denied'));
-            window._pendingCameraResolve = null;
-            window._pendingCameraReject = null;
-          }
-        """);
-        return;
-      }
-
-      // Open camera using ImagePicker
-      final picker = ImagePicker();
-      final XFile? photo = await picker.pickImage(
-        source: ImageSource.camera,
-        maxWidth: 2048,
-        maxHeight: 2048,
-        imageQuality: 85,
-      );
-
-      if (photo == null) {
-        debugPrint('User cancelled camera');
-        // Kirim error ke web
-        await controller.runJavaScript("""
-          if (window._pendingCameraReject) {
-            window._pendingCameraReject(new Error('User cancelled camera'));
-            window._pendingCameraResolve = null;
-            window._pendingCameraReject = null;
-          }
-        """);
-        return;
-      }
-
-      debugPrint('Photo captured: ${photo.name}');
-      
-      final bytes = await photo.readAsBytes();
-      final base64Image = base64Encode(bytes);
-      
-      // Kirim gambar ke web
-      await controller.runJavaScript("""
-        (function() {
-          if (window.receiveImageFromFlutter) {
-            window.receiveImageFromFlutter('$base64Image', '${photo.name}');
-          }
-        })();
-      """);
-      
-      _showSuccessSnackbar('Foto berhasil diambil');
-      
-    } catch (e) {
-      debugPrint('Error opening camera: $e');
-      _showErrorSnackbar('Gagal membuka kamera: $e');
-      
-      // Kirim error ke web
-      await controller.runJavaScript("""
-        if (window._pendingCameraReject) {
-          window._pendingCameraReject(new Error('${e.toString().replaceAll("'", "\\'")}'));
-          window._pendingCameraResolve = null;
-          window._pendingCameraReject = null;
-        }
-      """);
-    }
-  }
-
-  // ========== LOCATION FUNCTION ==========
-  Future<void> _getCurrentLocation() async {
-    try {
-      // Check location service
-      bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
-      if (!serviceEnabled) {
-        _showErrorSnackbar('Layanan lokasi tidak aktif. Silakan aktifkan GPS.');
-        await controller.runJavaScript("""
-          if (window._pendingLocationError) {
-            window._pendingLocationError(new Error('Location services disabled'));
-            window._pendingLocationSuccess = null;
-            window._pendingLocationError = null;
-          }
-        """);
-        return;
-      }
-      
-      // Check permission
-      LocationPermission permission = await Geolocator.checkPermission();
-      if (permission == LocationPermission.denied) {
-        permission = await Geolocator.requestPermission();
-        if (permission == LocationPermission.denied) {
-          _showErrorSnackbar('Izin lokasi ditolak');
-          await controller.runJavaScript("""
-            if (window._pendingLocationError) {
-              window._pendingLocationError(new Error('Location permission denied'));
-              window._pendingLocationSuccess = null;
-              window._pendingLocationError = null;
-            }
-          """);
-          return;
-        }
-      }
-      
-      if (permission == LocationPermission.deniedForever) {
-        _showErrorSnackbar('Izin lokasi ditolak permanen. Buka Pengaturan untuk mengubahnya.');
-        await openAppSettings();
-        await controller.runJavaScript("""
-          if (window._pendingLocationError) {
-            window._pendingLocationError(new Error('Location permission denied forever'));
-            window._pendingLocationSuccess = null;
-            window._pendingLocationError = null;
-          }
-        """);
-        return;
-      }
-      
-      // Get current position
-      Position position = await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.high,
-        timeLimit: const Duration(seconds: 10),
-      );
-      
-      debugPrint('Location obtained: ${position.latitude}, ${position.longitude}');
-      
-      // Kirim lokasi ke web
-      await controller.runJavaScript("""
-        (function() {
-          if (window.receiveLocationFromFlutter) {
-            window.receiveLocationFromFlutter(${position.latitude}, ${position.longitude}, ${position.accuracy});
-          }
-        })();
-      """);
-      
-      _showSuccessSnackbar('Lokasi berhasil didapatkan');
-      
-    } catch (e) {
-      debugPrint('Error getting location: $e');
-      _showErrorSnackbar('Gagal mendapatkan lokasi: $e');
-      
-      await controller.runJavaScript("""
-        if (window._pendingLocationError) {
-          window._pendingLocationError(new Error('${e.toString().replaceAll("'", "\\'")}'));
-          window._pendingLocationSuccess = null;
-          window._pendingLocationError = null;
-        }
-      """);
-    }
-  }
-
   Future<void> _initWebView() async {
-    controller = WebViewController()
-      ..setJavaScriptMode(JavaScriptMode.unrestricted)
-      ..setBackgroundColor(const Color(0x00000000))
-
-      // Blob channel for PDF
-      ..addJavaScriptChannel(
-        'BlobChannel',
-        onMessageReceived: (message) async {
-          debugPrint('BLOB CHANNEL DITERIMA');
-          try {
-            final data = jsonDecode(message.message) as Map<String, dynamic>;
-            if (data['type'] == 'blob_base64') {
-              await _savePdfFromBase64(
-                data['data'] as String,
-                filename: data['filename'] as String? ?? 'berita-acara.pdf',
+    controller =
+        WebViewController(
+            onPermissionRequest: (request) async {
+              debugPrint(
+                'Media capture permission requested: ${request.types}',
               );
-            }
-          } catch (_) {
-            await _savePdfFromBase64(message.message);
-          }
-        },
-      )
+              await request.grant();
+            },
+          )
+          ..setJavaScriptMode(JavaScriptMode.unrestricted)
+          ..setBackgroundColor(const Color(0x00000000))
+          ..addJavaScriptChannel(
+            'BlobChannel',
+            onMessageReceived: (message) async {
+              debugPrint('BLOB CHANNEL DITERIMA');
+              try {
+                final data =
+                    jsonDecode(message.message) as Map<String, dynamic>;
+                if (data['type'] == 'blob_base64') {
+                  await _savePdfFromBase64(
+                    data['data'] as String,
+                    filename: data['filename'] as String? ?? 'berita-acara.pdf',
+                  );
+                }
+              } catch (_) {
+                await _savePdfFromBase64(message.message);
+              }
+            },
+          )
+          ..setNavigationDelegate(
+            NavigationDelegate(
+              onPageFinished: (url) async {
+                debugPrint('PAGE LOADED: $url');
+                await controller.runJavaScript(_interceptBlobJs);
+                debugPrint('JS INJECTED');
+              },
+              onNavigationRequest: (request) async {
+                final url = request.url;
+                debugPrint('NAV REQUEST: $url');
 
-      // Camera channel
-      ..addJavaScriptChannel(
-        'FlutterCameraChannel',
-        onMessageReceived: (message) async {
-          debugPrint('Camera channel: ${message.message}');
-          if (message.message == 'open_camera' || message.message == 'take_photo') {
-            await _openCamera();
-          }
-        },
-      )
-
-      // Location channel
-      ..addJavaScriptChannel(
-        'FlutterLocationChannel',
-        onMessageReceived: (message) async {
-          debugPrint('Location channel: ${message.message}');
-          if (message.message == 'get_location') {
-            await _getCurrentLocation();
-          }
-        },
-      )
-
-      ..setNavigationDelegate(
-        NavigationDelegate(
-          onPageFinished: (url) async {
-            debugPrint('PAGE LOADED: $url');
-            // Inject blob interceptor
-            await controller.runJavaScript(_interceptBlobJs);
-            // Inject API overrides
-            await controller.runJavaScript(_overrideWebApisJs);
-            debugPrint('JS INJECTED - Web APIs overridden');
-          },
-          onNavigationRequest: (request) async {
-            final url = request.url;
-            debugPrint('NAV REQUEST: $url');
-
-            if (url.startsWith('blob:')) {
-              await controller.runJavaScript("""
+                if (url.startsWith('blob:')) {
+                  await controller.runJavaScript("""
                 (function() {
                   fetch('$url')
                     .then(function(r) { return r.blob(); })
@@ -566,23 +242,44 @@ class _WebViewPageState extends State<WebViewPage> with SingleTickerProviderStat
                     .catch(function(e) { console.error('fetch blob error', e); });
                 })();
               """);
-              return NavigationDecision.prevent;
-            }
+                  return NavigationDecision.prevent;
+                }
 
-            if (_isDirectFileUrl(url)) {
-              await _launchExternalUrl(url);
-              return NavigationDecision.prevent;
-            }
+                if (_isExternalUrl(url)) {
+                  await _launchExternalUrl(url);
+                  return NavigationDecision.prevent;
+                }
 
-            return NavigationDecision.navigate;
-          },
-          onWebResourceError: (error) {
-            debugPrint('WEB ERROR: ${error.description}');
-          },
-        ),
-      )
+                return NavigationDecision.navigate;
+              },
+              onWebResourceError: (error) {
+                debugPrint('WEB ERROR: ${error.description}');
+              },
+            ),
+          )
+          ..loadRequest(Uri.parse(baseUrl));
 
-      ..loadRequest(Uri.parse(baseUrl));
+    // Setup geolocation permission handling untuk Android
+    if (Platform.isAndroid) {
+      final androidController = controller.platform as AndroidWebViewController;
+      await androidController.setGeolocationPermissionsPromptCallbacks(
+        onShowPrompt: (params) async {
+          debugPrint('Geolocation permission requested from: ${params.origin}');
+          // Check dan request location permission jika belum granted
+          final locationStatus = await Permission.location.request();
+          final isGranted = locationStatus.isGranted;
+          debugPrint(
+            'Geolocation permission decision for ${params.origin}: $isGranted',
+          );
+          // Return response dengan allow=true (karena user sudah approve di app level)
+          // retain=true agar permission persist untuk origin ini
+          return GeolocationPermissionsResponse(allow: isGranted, retain: true);
+        },
+        onHidePrompt: () {
+          debugPrint('Geolocation permission prompt hidden');
+        },
+      );
+    }
   }
 
   bool _isDirectFileUrl(String url) {
@@ -591,10 +288,40 @@ class _WebViewPageState extends State<WebViewPage> with SingleTickerProviderStat
     return exts.any((e) => lower.contains(e));
   }
 
+  bool _isExternalUrl(String url) {
+    final lower = url.toLowerCase();
+    if (_isDirectFileUrl(lower)) {
+      return true;
+    }
+
+    if (lower.startsWith('geo:')) {
+      return true;
+    }
+
+    if (lower.contains('google.com/maps') ||
+        lower.contains('maps.google.com') ||
+        lower.contains('maps.app.goo.gl')) {
+      return true;
+    }
+
+    return false;
+  }
+
   Future<void> _launchExternalUrl(String url) async {
-    final uri = Uri.parse(url);
-    if (await canLaunchUrl(uri)) {
-      await launchUrl(uri, mode: LaunchMode.externalApplication);
+    if (url.isEmpty) return;
+
+    final uri = Uri.tryParse(url);
+    if (uri != null) {
+      if (await canLaunchUrl(uri)) {
+        await launchUrl(uri, mode: LaunchMode.externalApplication);
+        return;
+      }
+    }
+
+    try {
+      await launchUrlString(url, mode: LaunchMode.externalApplication);
+    } catch (e) {
+      debugPrint('LAUNCH URL ERROR: $url -> $e');
     }
   }
 
@@ -663,9 +390,10 @@ class _WebViewPageState extends State<WebViewPage> with SingleTickerProviderStat
 
     if (Platform.isAndroid) {
       final downloadDir = Directory('/storage/emulated/0/Download');
-      dir = await downloadDir.exists()
-          ? downloadDir
-          : await getExternalStorageDirectory();
+      dir =
+          await downloadDir.exists()
+              ? downloadDir
+              : await getExternalStorageDirectory();
     } else {
       dir = await getApplicationDocumentsDirectory();
     }
@@ -715,7 +443,8 @@ class _WebViewPageState extends State<WebViewPage> with SingleTickerProviderStat
     }
 
     final now = DateTime.now();
-    final isFirstPress = lastBackPressed == null ||
+    final isFirstPress =
+        lastBackPressed == null ||
         now.difference(lastBackPressed!) > const Duration(seconds: 2);
 
     if (isFirstPress) {
@@ -781,7 +510,9 @@ class _WebViewPageState extends State<WebViewPage> with SingleTickerProviderStat
                                   shape: BoxShape.circle,
                                   boxShadow: [
                                     BoxShadow(
-                                      color: Colors.green.withValues(alpha: 0.35),
+                                      color: Colors.green.withValues(
+                                        alpha: 0.35,
+                                      ),
                                       blurRadius: 16,
                                       offset: const Offset(0, 8),
                                     ),
@@ -824,7 +555,9 @@ class _WebViewPageState extends State<WebViewPage> with SingleTickerProviderStat
 
               if (_isSaving)
                 Positioned(
-                  top: 0, left: 0, right: 0,
+                  top: 0,
+                  left: 0,
+                  right: 0,
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
@@ -836,7 +569,8 @@ class _WebViewPageState extends State<WebViewPage> with SingleTickerProviderStat
                         color: Colors.black87,
                         width: double.infinity,
                         padding: const EdgeInsets.symmetric(
-                          horizontal: 16, vertical: 6,
+                          horizontal: 16,
+                          vertical: 6,
                         ),
                         child: const Text(
                           'Menyimpan PDF...',
