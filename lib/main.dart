@@ -417,13 +417,6 @@ class _WebViewPageState extends State<WebViewPage>
     );
   }
 
-  void _showSuccessSnackbar(String msg) {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(msg), backgroundColor: Colors.green[700]),
-    );
-  }
-
   void _hideSuccessAnimation() {
     if (!mounted) return;
     setState(() {
