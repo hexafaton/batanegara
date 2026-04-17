@@ -1,4 +1,4 @@
-name: barata
+name: Batanegoro
 description: "A new Flutter project."
 publish_to: 'none'
 
@@ -26,10 +26,10 @@ dev_dependencies:
 flutter_launcher_icons:
   android: true
   ios: false
-  image_path: "assets/barata.png"
+  image_path: "assets/barata2.png"
 
 flutter:
   uses-material-design: true
 
   assets:
-    - assets/barata.png
+    - assets/barata2.png
